@@ -38,7 +38,7 @@ Do not flag purely stylistic differences (tone, word choice, capitalization) unl
 
 Severity guide: "Critical" = safety/legal/identity risk (wrong model, wrong dosage, incompatible voltage, wrong product entirely). "High" = likely to cause rejection/returns/major confusion (wrong color/size, wrong pack count, incompatible device/model). "Medium" = SEO quality or clarity issue (missing feature, inconsistent wording, minor numeric rounding beyond normal tolerance). "Low" = cosmetic/formatting only.
 
-Return ONLY a JSON array (no prose, no markdown fences, no explanation) of at most 8 issues, ordered most severe first. Each element must have exactly these keys, all string values kept under 15 words each:
+Return ONLY a JSON array (no prose, no markdown fences, no explanation) of at most 6 issues, ordered most severe first. Each element must have exactly these keys, all string values kept under 12 words each:
 mismatch_type, severity ("Critical"|"High"|"Medium"|"Low"), affected_field, expected_value, detected_value, evidence, recommended_action, confidence (a number 0-1).
 If there are no real issues, return []."""
 
@@ -437,6 +437,32 @@ def analyze_image_local(url):
 
 # ============================================================== AI AUDIT ==============================================================
 
+def _parse_json_array(text):
+    """Parse a JSON array; if it's truncated mid-object (hit the token limit),
+    salvage whatever complete objects came through instead of discarding everything."""
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, list) else None
+    except Exception:
+        pass
+    # truncated response: cut back to the last complete "},{" or "}" boundary and close the array
+    last_close = text.rfind("}")
+    if last_close == -1:
+        return None
+    salvaged = text[:last_close + 1]
+    if not salvaged.rstrip().startswith("["):
+        return None
+    salvaged = salvaged.rstrip()
+    if salvaged.endswith(","):
+        salvaged = salvaged[:-1]
+    salvaged += "]"
+    try:
+        parsed = json.loads(salvaged)
+        return parsed if isinstance(parsed, list) else None
+    except Exception:
+        return None
+
+
 def normalize_severity(s):
     s = (s or "").lower()
     if s.startswith("crit"):
@@ -490,20 +516,24 @@ def call_claude_audit(record, api_key):
     resp = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        json={"model": AI_MODEL, "max_tokens": 1000, "system": SYSTEM_PROMPT,
+        json={"model": AI_MODEL, "max_tokens": 2048, "system": SYSTEM_PROMPT,
               "messages": [{"role": "user", "content": content}]},
         timeout=60,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"API error {resp.status_code}: {resp.text[:200]}")
+        raise RuntimeError(f"API error {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
+    stop_reason = data.get("stop_reason", "")
     text_resp = "\n".join(b["text"] for b in data.get("content", []) if b.get("type") == "text").strip()
     cleaned = re.sub(r"^```json|^```|```$", "", text_resp.strip(), flags=re.I).strip()
-    parsed = json.loads(cleaned)
-    if not isinstance(parsed, list):
-        raise ValueError("AI response was not a list")
+    parsed = _parse_json_array(cleaned)
+    if parsed is None:
+        snippet = cleaned[:250].replace("\n", " ")
+        hint = " (response was cut off — hit the token limit)" if stop_reason == "max_tokens" else ""
+        raise ValueError(f"Could not parse AI response as JSON{hint}. Raw start: {snippet}")
+    parsed_list = parsed
     out = []
-    for item in parsed:
+    for item in parsed_list:
         out.append({
             "mismatch_type": item.get("mismatch_type", "Issue"),
             "severity": normalize_severity(item.get("severity")),
