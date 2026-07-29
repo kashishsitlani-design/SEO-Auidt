@@ -1,4 +1,3 @@
-
 """
 Listing Auditor — Streamlit edition
 Cross-field + image consistency scanner for product listing exports.
@@ -26,7 +25,7 @@ from PIL import Image
 MIN_RES = 1000                 # minimum recommended pixel dimension per side
 MAX_IMAGES_PER_SKU = 4          # images sent to the AI per SKU
 IMAGE_MAX_DIM = 768             # resize images to this before sending to the AI
-AI_MODEL = "claude-sonnet-4-6"
+AI_MODEL = "claude-sonnet-5"
 DUPLICATE_HASH_DISTANCE = 4      # <= this many differing bits => "same image"
 
 SYSTEM_PROMPT = """You are an e-commerce listing QA auditor. Compare the product's customer-facing content (title, description, bullet points) and any provided product images against the given backend/reference attributes for the same SKU (the approved source of truth). Also cross-check the title, description and bullets against each other.
@@ -601,6 +600,23 @@ with st.sidebar:
                                   "Without it, the tool still runs fast local checks (quantities, flavor/color, "
                                   "formatting, broken links, resolution, duplicate images).")
     use_ai = st.checkbox("Run AI content & image audit", value=bool(api_key))
+    if st.button("Test AI connection", use_container_width=True):
+        if not api_key:
+            st.error("Enter an API key above first.")
+        else:
+            try:
+                test_resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={"model": AI_MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "Say OK."}]},
+                    timeout=20,
+                )
+                if test_resp.status_code == 200:
+                    st.success("Connected — the AI audit will run for real.")
+                else:
+                    st.error(f"API error {test_resp.status_code}: {test_resp.text[:300]}")
+            except Exception as e:
+                st.error(f"Couldn't reach the API: {e}")
     st.number_input("Minimum recommended resolution (px per side)", min_value=200, max_value=4000, value=MIN_RES,
                      key="min_res_input")
     MIN_RES = st.session_state.min_res_input
@@ -694,6 +710,17 @@ elif st.session_state.step == "results":
     crit_n = sum(1 for r in analyzed if r["counts"]["critical"] > 0)
     high_n = sum(1 for r in analyzed if r["counts"]["high"] > 0)
     clean_n = sum(1 for r in analyzed if len(r["issues"]) == 0)
+    error_n = sum(1 for r in analyzed if r["ai_status"] == "error")
+    skipped_n = sum(1 for r in analyzed if r["ai_status"] == "skipped")
+
+    if error_n > 0:
+        sample_err = next((r["ai_error"] for r in analyzed if r["ai_status"] == "error"), "")
+        st.error(f"AI audit failed for {error_n} of {total} SKU(s) and fell back to local keyword checks only "
+                 f"(which mainly catch quantity/unit mismatches — that's likely why results look thin). "
+                 f"First error seen: {sample_err}")
+    elif skipped_n == total:
+        st.info("AI audit was off for this whole run — every SKU below only has fast local keyword checks "
+                 "(mainly quantities/units), not the full AI comparison.")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("SKUs", total)
