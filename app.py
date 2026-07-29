@@ -88,6 +88,66 @@ VARIANT_GROUPS = {
 VARIANT_ESCAPE_WORDS = ["variety", "assorted", "multi-", "multi ", "multipack", "set of", "combo", "bundle", "mixed",
                          "random color", "random colour", "colors may vary", "colours may vary"]
 
+_NEG_LOOKBEHINDS = r"(?<!\bno\s)(?<!\bwithout\s)(?<!\bnon-)(?<!\bnon\s)(?<!\bzero\s)(?<!\b0%\s)"
+
+
+def make_claim_pair(attr, positive_words, negative_patterns):
+    pos_alt = "|".join(w.replace(" ", r"\s+") for w in positive_words)
+    negative_re = re.compile("|".join(negative_patterns), re.I)
+    positive_re = re.compile(_NEG_LOOKBEHINDS + r"\b(?:" + pos_alt + r")\b(?!\s*-?\s*free)", re.I)
+    return {"attr": attr, "negative_re": negative_re, "positive_re": positive_re}
+
+
+def make_opposing_pair(label, a_pattern, b_pattern):
+    return {"attr": label, "a_re": re.compile(a_pattern, re.I), "b_re": re.compile(b_pattern, re.I)}
+
+
+# "contains X" vs "X-free" style contradictions — the same shape as the caffeine/caffeine-free example,
+# generalized across food, supplements, personal care and household goods.
+CLAIM_PAIRS = [
+    make_claim_pair("caffeine", ["caffeine", "caffeinated"],
+                     [r"caffeine[\s-]?free", r"decaf(?:feinated)?", r"0\s?mg\s?caffeine", r"no\s+caffeine"]),
+    make_claim_pair("sugar", ["sugar", "sugary", "sweetened"],
+                     [r"sugar[\s-]?free", r"unsweetened", r"no\s+sugar\s+added", r"zero\s+sugar"]),
+    make_claim_pair("gluten", ["gluten"], [r"gluten[\s-]?free"]),
+    make_claim_pair("dairy", ["dairy", "milk based"], [r"dairy[\s-]?free", r"non-?dairy", r"lactose[\s-]?free"]),
+    make_claim_pair("lactose", ["lactose"], [r"lactose[\s-]?free"]),
+    make_claim_pair("soy", ["soy", "soya"], [r"soy[\s-]?free"]),
+    make_claim_pair("egg", ["egg", "eggs"], [r"egg[\s-]?free"]),
+    make_claim_pair("nuts", ["peanut", "peanuts", "tree nut", "tree nuts"], [r"nut[\s-]?free", r"peanut[\s-]?free"]),
+    make_claim_pair("wheat", ["wheat"], [r"wheat[\s-]?free"]),
+    make_claim_pair("alcohol", ["alcohol", "alcoholic"], [r"alcohol[\s-]?free", r"non-?alcoholic", r"0%?\s?abv"]),
+    make_claim_pair("nicotine", ["nicotine"], [r"nicotine[\s-]?free", r"0\s?mg\s?nicotine"]),
+    make_claim_pair("thc", ["thc"], [r"thc[\s-]?free", r"0%?\s?thc"]),
+    make_claim_pair("fragrance", ["scented", "fragrance added", "perfumed"], [r"unscented", r"fragrance[\s-]?free"]),
+    make_claim_pair("bpa", ["bpa"], [r"bpa[\s-]?free"]),
+    make_claim_pair("paraben", ["paraben", "parabens"], [r"paraben[\s-]?free"]),
+    make_claim_pair("sulfate", ["sulfate", "sulfates", "sulphate", "sulphates"], [r"sulfate[\s-]?free", r"sulphate[\s-]?free"]),
+    make_claim_pair("phthalate", ["phthalate", "phthalates"], [r"phthalate[\s-]?free"]),
+    make_claim_pair("gmo", ["gmo"], [r"non-?gmo", r"gmo[\s-]?free"]),
+    make_claim_pair("latex", ["latex"], [r"latex[\s-]?free"]),
+    make_claim_pair("sodium", ["salted", "high sodium"], [r"unsalted", r"sodium[\s-]?free", r"no\s+salt\s+added", r"low\s+sodium"]),
+    make_claim_pair("msg", ["msg"], [r"no\s+msg", r"msg[\s-]?free"]),
+    make_claim_pair("cholesterol", ["cholesterol"], [r"cholesterol[\s-]?free", r"0\s?mg\s?cholesterol"]),
+    make_claim_pair("trans fat", ["trans fat"], [r"trans[\s-]?fat[\s-]?free", r"0\s?g\s?trans\s?fat"]),
+]
+
+# genuinely mutually-exclusive descriptor pairs (not "X vs X-free", but "A vs B")
+OPPOSING_PAIRS = [
+    make_opposing_pair("power source", r"\b(wireless|cordless)\b", r"\b(wired|corded)\b"),
+    make_opposing_pair("operation", r"\bmanual(?:ly)?[\s-]?operated\b|\bhand[\s-]?operated\b",
+                        r"\bautomatic(?:ally)?\b|\belectric(?:ally)?[\s-]?operated\b"),
+    make_opposing_pair("washing care", r"\bmachine\s*washable\b",
+                        r"\bhand\s*wash\s*only\b|\bdry\s*clean\s*only\b|\bnot\s*machine\s*washable\b"),
+    make_opposing_pair("dishwasher care", r"\bdishwasher\s*safe\b", r"\bnot\s*dishwasher\s*safe\b|\bhand\s*wash\s*only\b"),
+    make_opposing_pair("usage environment", r"\bindoor\s*use\s*only\b",
+                        r"\boutdoor\s*use\b(?!\s*only)|\bindoor\s*(?:and|&)\s*outdoor\b"),
+    make_opposing_pair("assembly", r"\bno\s*assembly\s*required\b|\bpre[\s-]?assembled\b",
+                        r"\bassembly\s*required\b|\bsome\s*assembly\b"),
+    make_opposing_pair("waterproofing", r"\bwaterproof\b",
+                        r"\bnot\s*waterproof\b|\bwater[\s-]?resistant\s*only\b|\bnot\s*water[\s-]?resistant\b"),
+]
+
 ODD_CHECKS = [
     (re.compile(r"&(?:amp|nbsp|quot|apos|reg|trade|copy|hellip|mdash|ndash|rsquo|lsquo|rdquo|ldquo|#\d{2,4});", re.I),
      "low", "contains an unescaped HTML entity (e.g. \"&amp;\", \"&nbsp;\")."),
@@ -196,6 +256,43 @@ def local_fallback_issues(fields):
                         "recommended_action": "Confirm the correct variant and align", "confidence": 0.7,
                         "source": "local",
                     })
+
+    for pair in CLAIM_PAIRS:
+        positive_fields, negative_fields = [], []
+        for name, val in fields.items():
+            if not val:
+                continue
+            if pair["negative_re"].search(val):
+                negative_fields.append(name)
+            elif pair["positive_re"].search(val):
+                positive_fields.append(name)
+        if positive_fields and negative_fields:
+            issues.append({
+                "mismatch_type": f'"{pair["attr"]}" contradiction', "severity": "critical",
+                "affected_field": f'{", ".join(positive_fields)} vs {", ".join(negative_fields)}',
+                "expected_value": f'contains {pair["attr"]}', "detected_value": f'{pair["attr"]}-free',
+                "evidence": f'{", ".join(positive_fields)} suggest(s) {pair["attr"]}; {", ".join(negative_fields)} say(s) {pair["attr"]}-free',
+                "recommended_action": "Confirm which is correct and align all fields", "confidence": 0.75, "source": "local",
+            })
+
+    for pair in OPPOSING_PAIRS:
+        a_fields, b_fields = [], []
+        for name, val in fields.items():
+            if not val:
+                continue
+            if pair["b_re"].search(val):
+                b_fields.append(name)
+            elif pair["a_re"].search(val):
+                a_fields.append(name)
+        if a_fields and b_fields:
+            issues.append({
+                "mismatch_type": f'{pair["attr"].capitalize()} conflict', "severity": "high",
+                "affected_field": f'{", ".join(a_fields)} vs {", ".join(b_fields)}',
+                "expected_value": "consistent claim", "detected_value": "contradictory claim",
+                "evidence": f'{", ".join(a_fields)} vs {", ".join(b_fields)} describe this differently',
+                "recommended_action": "Double-check which is correct", "confidence": 0.7, "source": "local",
+            })
+
     return issues
 
 
